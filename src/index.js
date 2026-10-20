@@ -63,6 +63,36 @@ function animeCards(doc) {
   }
   return uniqueAnime(found);
 }
+function extractStreaming(doc) {
+  const servers = [];
+  const seen = new Set();
+  // Public player embeds exposed by the episode page. This does not attempt to
+  // bypass DRM, authentication, or protected players.
+  for (const node of doc.querySelectorAll('iframe[src], iframe[data-src], source[src], video[src], a[href]')) {
+    const tag = (node.tagName || '').toLowerCase();
+    const raw = tag === 'a'
+      ? (node.getAttribute('href') || '')
+      : (node.getAttribute('src') || node.getAttribute('data-src') || '');
+    if (!raw || /^(javascript:|data:|#)/i.test(raw)) continue;
+    let parsed;
+    try { parsed = new URL(raw, BASE); } catch { continue; }
+    if (!['http:', 'https:'].includes(parsed.protocol)) continue;
+    const isPlayer = tag !== 'a' || /player|embed|stream|video|mirror/i.test(
+      `${node.getAttribute('class') || ''} ${node.getAttribute('id') || ''} ${parsed.hostname} ${parsed.pathname}`
+    );
+    if (!isPlayer) continue;
+    const urlValue = parsed.href;
+    if (seen.has(urlValue)) continue;
+    seen.add(urlValue);
+    let label = txt(node);
+    if (!label || tag !== 'a') {
+      label = parsed.hostname.replace(/^www\./, '');
+    }
+    servers.push({ title: label, type: tag === 'source' || /\.m3u8?(?:$|\?)/i.test(parsed.pathname) ? 'media' : 'embed', url: urlValue });
+  }
+  return servers;
+}
+
 function uniqueAnime(items) {
   const seen = new Set();
   return items.filter(item => {
@@ -98,7 +128,7 @@ function scheduleItems(doc) {
   return [];
 }
 async function handle(path, url) {
-  if (path === "/otakudesu") return ok({ routes: ["/otakudesu/home", "/otakudesu/schedule", "/otakudesu/ongoing?page=1", "/otakudesu/completed?page=1", "/otakudesu/search?q=naruto", "/otakudesu/anime/{animeId}", "/otakudesu/episode/{episodeId}"] });
+  if (path === "/otakudesu") return ok({ routes: ["/otakudesu/home", "/otakudesu/schedule", "/otakudesu/ongoing?page=1", "/otakudesu/completed?page=1", "/otakudesu/search?q=naruto", "/otakudesu/anime/{animeId}", "/otakudesu/episode/{episodeId}", "/otakudesu/stream/{episodeId}"] });
   if (path === "/otakudesu/home") {
     const doc = await getDocument("/");
     const animeList = doc.querySelectorAll(".venz .detpost").map(card).filter(item => item.title);
@@ -130,7 +160,14 @@ async function handle(path, url) {
     const id = em[1], doc = await getDocument(`/episode/${encodeURIComponent(id)}/`);
     const title = txt(doc.querySelector("h1.posttl") || doc.querySelector("h1"));
     const downloads = doc.querySelectorAll(".download ul li").map(li => ({ quality: txt(li.querySelector("strong")), links: li.querySelectorAll("a").map(a => ({ title: txt(a), url: a.getAttribute("href") || "" })) }));
-    return ok({ details: { title, episodeId: id, downloads } });
+    const streaming = extractStreaming(doc);
+    return ok({ details: { title, episodeId: id, streaming, downloads } });
+  }
+  const sm = path.match(/^\/otakudesu\/stream\/([a-zA-Z0-9_-]+)$/);
+  if (sm) {
+    const id = sm[1], doc = await getDocument(`/episode/${encodeURIComponent(id)}/`);
+    const title = txt(doc.querySelector("h1.posttl") || doc.querySelector("h1"));
+    return ok({ details: { title, episodeId: id, servers: extractStreaming(doc), note: "Hanya URL player/media yang tampak di halaman sumber; URL embed belum tentu berupa video langsung dan mungkin memerlukan dukungan player pihak ketiga." } });
   }
   if (path === "/otakudesu/schedule") {
     const doc = await getDocument("/jadwal-rilis/");
