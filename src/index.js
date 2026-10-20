@@ -30,9 +30,70 @@ function card(node) {
     releasedOn: txt(node.querySelector(".newnime")) };
 }
 function animeCards(doc) {
-  for (const selector of [".venz .detpost", ".detpost", ".venser .detpost"]) {
+  for (const selector of [
+    ".venz .detpost", ".detpost", ".venser .detpost",
+    ".chivsrc .detpost", ".search-list .detpost", ".searchlist .detpost",
+    ".isi .detpost", ".anime-list .detpost"
+  ]) {
     const nodes = doc.querySelectorAll(selector);
-    if (nodes.length) return nodes.map(card).filter(item => item.title);
+    if (nodes.length) {
+      const result = nodes.map(card).filter(item => item.title && item.animeId);
+      if (result.length) return uniqueAnime(result);
+    }
+  }
+  // Fallback for search pages whose result cards do not use .detpost.
+  const found = [];
+  for (const a of doc.querySelectorAll('a[href*="/anime/"]')) {
+    const href = a.getAttribute("href") || "";
+    const title = txt(a);
+    if (!title || !href) continue;
+    let parent = a.parentNode;
+    let chosen = null;
+    for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentNode) {
+      if (parent.querySelector && parent.querySelector("img")) { chosen = parent; break; }
+    }
+    const item = chosen ? card(chosen) : {
+      title, animeId: (new URL(href, BASE).pathname.split("/").filter(Boolean).pop() || ""),
+      poster: "", url: absolute(href), episode: "", releasedOn: ""
+    };
+    if (!item.title) item.title = title;
+    if (!item.animeId) item.animeId = new URL(href, BASE).pathname.split("/").filter(Boolean).pop() || "";
+    if (!item.url) item.url = absolute(href);
+    if (item.animeId) found.push(item);
+  }
+  return uniqueAnime(found);
+}
+function uniqueAnime(items) {
+  const seen = new Set();
+  return items.filter(item => {
+    const key = item.animeId || item.url || item.title;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function scheduleItems(doc) {
+  // Otakudesu has used more than one wrapper for its weekday schedule.
+  const selectors = [
+    ".kglist321 .kglist", ".kglist321", ".kglist", ".schedule .jadwal",
+    ".schedule .kotakjadwal", ".schedule li", ".jadwal-rilis .jadwal",
+    ".rapi .kglist", ".rapi", ".schedule", ".jadwal"
+  ];
+  for (const selector of selectors) {
+    const nodes = doc.querySelectorAll(selector);
+    if (!nodes.length) continue;
+    const list = nodes.map(node => {
+      const heading = node.querySelector("h2") || node.querySelector("h3") || node.querySelector("strong") || node.querySelector("b");
+      const animeList = node.querySelectorAll('a[href*="/anime/"]').map(a => {
+        const href = a.getAttribute("href") || "";
+        return { title: txt(a), url: absolute(href), animeId: href ? (new URL(href, BASE).pathname.split("/").filter(Boolean).pop() || "") : "" };
+      }).filter(x => x.title && x.animeId);
+      return { day: txt(heading), animeList: uniqueAnime(animeList).map(x => ({ title: x.title, url: x.url, animeId: x.animeId })) };
+    }).filter(x => x.animeList.length);
+    if (list.length) {
+      const seen = new Set();
+      return list.filter(x => { const k = x.day + "|" + x.animeList.map(a => a.animeId).join(","); if (seen.has(k)) return false; seen.add(k); return true; });
+    }
   }
   return [];
 }
@@ -73,10 +134,7 @@ async function handle(path, url) {
   }
   if (path === "/otakudesu/schedule") {
     const doc = await getDocument("/jadwal-rilis/");
-    const scheduleList = doc.querySelectorAll(".schedule .jadwal, .schedule .kotakjadwal, .schedule li").map(node => ({
-      day: txt(node.querySelector("h2") || node.querySelector("h3") || node.querySelector("strong")),
-      animeList: node.querySelectorAll("a").map(a => { const href = a.getAttribute("href") || ""; return { title: txt(a), url: absolute(href), animeId: href ? (new URL(href, BASE).pathname.split("/").filter(Boolean).pop() || "") : "" }; }).filter(x => x.title)
-    })).filter(x => x.animeList.length);
+    const scheduleList = scheduleItems(doc);
     return ok({ scheduleList });
   }
   return null;
@@ -94,4 +152,3 @@ export default { async fetch(request) {
     return respond({ statusCode: 502, message: error instanceof Error ? error.message : "Gagal mengambil data sumber anime", data: null }, 502);
   }
 }};
-               
